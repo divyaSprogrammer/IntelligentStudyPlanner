@@ -1,20 +1,15 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date, time
+from datetime import date, datetime
 
-# ---------------------------
-# Helpers to init session state
-# ---------------------------
-
+# ------------------------------------------------
+# Initialize session state
+# ------------------------------------------------
 def init_state():
-    if "subjects" not in st.session_state:
-        st.session_state.subjects = []  # list of dicts
-    if "classes" not in st.session_state:
-        st.session_state.classes = []   # list of dicts
+    if "projects" not in st.session_state:
+        st.session_state.projects = []  # list of dicts: {id, name, color}
     if "tasks" not in st.session_state:
         st.session_state.tasks = []     # list of dicts
-    if "exams" not in st.session_state:
-        st.session_state.exams = []     # list of dicts
     if "next_id" not in st.session_state:
         st.session_state.next_id = 1
 
@@ -25,341 +20,352 @@ def get_new_id():
     return nid
 
 
-def find_subject_name(subj_id):
-    for s in st.session_state.subjects:
-        if s["id"] == subj_id:
-            return s["name"]
-    return "-"
+def get_project_names():
+    return [p["name"] for p in st.session_state.projects]
 
 
-# ---------------------------
-# UI Components
-# ---------------------------
+# ------------------------------------------------
+# Sidebar
+# ------------------------------------------------
+def sidebar():
+    st.sidebar.title("📝 Todo Manager")
+    st.sidebar.caption("A simple Todoist-style task manager built with Streamlit.")
 
-def sidebar_info():
-    st.sidebar.title("Student Life Planner")
-    st.sidebar.caption("Inspired by 'My Study Life' – timetable + tasks + exams in one place.")
+    username = st.sidebar.text_input("Your name", value="User")
     st.sidebar.markdown("---")
-    username = st.sidebar.text_input("Your name", value="Student")
-    st.sidebar.markdown("Use the tabs at the top to manage your academic life.")
-    return username
+
+    view = st.sidebar.selectbox(
+        "Quick View",
+        ["Today", "Upcoming", "Overdue", "All Tasks", "Completed"]
+    )
+
+    st.sidebar.markdown("---")
+    selected_project = st.sidebar.selectbox(
+        "Filter by Project",
+        ["All Projects"] + get_project_names()
+    )
+
+    st.sidebar.markdown("---")
+    st.sidebar.write("Task status filter:")
+    status_filter = st.sidebar.radio(
+        "",
+        ["All", "Pending", "Completed"],
+        horizontal=True
+    )
+
+    return username, view, selected_project, status_filter
 
 
-# ---------------------------
-# Dashboard (Today Overview)
-# ---------------------------
-
-def dashboard(username):
-    st.header(f"📊 Dashboard – Welcome, {username}!")
-
+# ------------------------------------------------
+# Dashboard / View Filter
+# ------------------------------------------------
+def filter_tasks(tasks, view, selected_project, status_filter):
     today = date.today()
-    today_str = today.strftime("%A, %d %B %Y")
-    st.write(f"**Today:** {today_str}")
+    filtered = tasks
 
-    # Today’s classes
-    st.subheader("📚 Today’s Classes")
-    TODAY_DAY_NAME = today.strftime("%A")  # Monday, Tuesday, ...
-    classes_today = [c for c in st.session_state.classes if c["day"] == TODAY_DAY_NAME]
+    # Filter by project
+    if selected_project != "All Projects":
+        filtered = [t for t in filtered if t["project"] == selected_project]
 
-    if classes_today:
-        df_classes = pd.DataFrame(classes_today)
-        df_classes = df_classes[["subject_name", "start_time", "end_time", "room", "notes"]]
-        df_classes.columns = ["Subject", "Start", "End", "Room", "Notes"]
-        st.table(df_classes)
-    else:
-        st.info("No classes added for today.")
+    # Filter by status
+    if status_filter == "Pending":
+        filtered = [t for t in filtered if t["status"] == "Pending"]
+    elif status_filter == "Completed":
+        filtered = [t for t in filtered if t["status"] == "Completed"]
 
-    # Tasks due today
-    st.subheader("✅ Tasks Due Today")
-    tasks_today = [
-        t for t in st.session_state.tasks
-        if t["due_date"] == today and t["status"] == "Pending"
-    ]
+    # Quick view logic
+    if view == "Today":
+        filtered = [
+            t for t in filtered
+            if t["due_date"] is not None and t["due_date"] == today
+        ]
+    elif view == "Upcoming":
+        filtered = [
+            t for t in filtered
+            if t["due_date"] is not None and t["due_date"] > today
+        ]
+    elif view == "Overdue":
+        filtered = [
+            t for t in filtered
+            if t["due_date"] is not None and t["due_date"] < today and t["status"] == "Pending"
+        ]
+    elif view == "Completed":
+        filtered = [t for t in filtered if t["status"] == "Completed"]
+    # "All Tasks" → no additional filter
 
-    if tasks_today:
-        df_tasks = pd.DataFrame(tasks_today)
-        df_tasks = df_tasks[["title", "subject_name", "type", "priority"]]
-        df_tasks.columns = ["Task", "Subject", "Type", "Priority"]
-        st.table(df_tasks)
-    else:
-        st.info("No pending tasks due today. 🎉")
-
-    # Next upcoming exam
-    st.subheader("📝 Next Exam")
-    future_exams = [e for e in st.session_state.exams if e["date"] >= today]
-    future_exams.sort(key=lambda x: (x["date"], x["time"]))
-
-    if future_exams:
-        exam = future_exams[0]
-        st.success(
-            f"Next exam: **{exam['title']} ({exam['subject_name']})** "
-            f"on **{exam['date'].strftime('%d %b %Y')} at {exam['time'].strftime('%H:%M')}**"
-        )
-        st.write(f"Type: {exam['type']}  |  Location: {exam['location'] or '—'}")
-    else:
-        st.info("No upcoming exams added yet.")
+    return filtered
 
 
-# ---------------------------
-# Subjects Page
-# ---------------------------
+# ------------------------------------------------
+# Projects Page
+# ------------------------------------------------
+def projects_page():
+    st.header("🗂 Projects")
 
-def subjects_page():
-    st.header("📚 Subjects")
+    with st.form("add_project_form", clear_on_submit=True):
+        name = st.text_input("Project name", placeholder="e.g. College", max_chars=50)
+        color = st.color_picker("Color", value="#ff6b6b")
+        add_btn = st.form_submit_button("Add Project")
 
-    with st.form("add_subject_form"):
-        name = st.text_input("Subject name", placeholder="e.g. Data Structures")
-        teacher = st.text_input("Teacher name", placeholder="e.g. Dr. Sharma")
-        color = st.color_picker("Color tag", value="#4CAF50")
-        submitted = st.form_submit_button("Add Subject")
-
-        if submitted:
-            if name.strip() == "":
-                st.error("Please enter a subject name.")
+        if add_btn:
+            if not name.strip():
+                st.error("Please enter a project name.")
             else:
-                st.session_state.subjects.append(
+                st.session_state.projects.append(
                     {
                         "id": get_new_id(),
                         "name": name.strip(),
-                        "teacher": teacher.strip(),
                         "color": color
                     }
                 )
-                st.success(f"Added subject: {name}")
+                st.success(f"Project '{name}' added.")
 
-    if st.session_state.subjects:
-        st.subheader("Your Subjects")
-        df = pd.DataFrame(st.session_state.subjects)
-        df_display = df[["name", "teacher", "color"]]
-        df_display.columns = ["Subject", "Teacher", "Color"]
+    if st.session_state.projects:
+        st.subheader("Your Projects")
+        df = pd.DataFrame(st.session_state.projects)
+        df_display = df[["name", "color"]]
+        df_display.columns = ["Project", "Color"]
         st.table(df_display)
     else:
-        st.info("No subjects added yet. Use the form above to add one.")
+        st.info("No projects yet. Create one using the form above.")
 
 
-# ---------------------------
-# Classes / Timetable Page
-# ---------------------------
+# ------------------------------------------------
+# Add Task Form
+# ------------------------------------------------
+def add_task_form():
+    st.subheader("➕ Add New Task")
 
-def classes_page():
-    st.header("🕒 Class Timetable")
+    col1, col2 = st.columns(2)
+    with col1:
+        title = st.text_input("Task title", placeholder="e.g. Buy groceries")
+        description = st.text_area("Description (optional)", height=80, key="desc")
+    with col2:
+        # Project
+        projects = get_project_names()
+        if not projects:
+            project = st.text_input("Project", value="Inbox")
+        else:
+            project = st.selectbox("Project", ["Inbox"] + projects)
 
-    if not st.session_state.subjects:
-        st.warning("You must add at least one subject before adding classes.")
-        return
+        # Priority
+        priority = st.selectbox(
+            "Priority",
+            ["Low", "Medium", "High", "Urgent"],
+            index=1
+        )
 
-    days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        # Due date
+        due_option = st.radio("Set due date?", ["No due date", "Pick a date"], index=0, horizontal=True)
+        due_dt = None
+        if due_option == "Pick a date":
+            due_dt = st.date_input("Due date", value=date.today())
 
-    with st.form("add_class_form"):
-        subject_names = [s["name"] for s in st.session_state.subjects]
-        sel_subj_name = st.selectbox("Subject", subject_names)
-        day = st.selectbox("Day of week", days_of_week)
-        start = st.time_input("Start time", value=time(9, 0))
-        end = st.time_input("End time", value=time(10, 0))
-        room = st.text_input("Room / Location", placeholder="e.g. Lab 203")
-        notes = st.text_input("Notes (optional)", placeholder="e.g. Bring laptop")
-        submitted = st.form_submit_button("Add Class")
+        # Labels
+        labels_text = st.text_input(
+            "Labels (comma separated)",
+            placeholder="e.g. home, personal, quick"
+        )
 
-        if submitted:
-            subj = next(s for s in st.session_state.subjects if s["name"] == sel_subj_name)
-            st.session_state.classes.append(
+    add_button = st.button("Add Task")
+
+    if add_button:
+        if not title.strip():
+            st.error("Please enter a task title.")
+        else:
+            labels = [l.strip() for l in labels_text.split(",") if l.strip()] if labels_text else []
+            st.session_state.tasks.append(
                 {
                     "id": get_new_id(),
-                    "subject_id": subj["id"],
-                    "subject_name": subj["name"],
-                    "day": day,
-                    "start_time": start.strftime("%H:%M"),
-                    "end_time": end.strftime("%H:%M"),
-                    "room": room.strip(),
-                    "notes": notes.strip()
+                    "title": title.strip(),
+                    "description": description.strip(),
+                    "project": project,
+                    "priority": priority,
+                    "due_date": due_dt,
+                    "labels": labels,
+                    "status": "Pending",
+                    "created_at": datetime.now()
                 }
             )
-            st.success(f"Added class for {sel_subj_name} on {day} at {start.strftime('%H:%M')}")
-
-    if st.session_state.classes:
-        st.subheader("Weekly Timetable")
-
-        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        for d in days:
-            day_classes = [c for c in st.session_state.classes if c["day"] == d]
-            if not day_classes:
-                continue
-            st.markdown(f"**{d}**")
-            df = pd.DataFrame(day_classes)
-            df = df[["subject_name", "start_time", "end_time", "room", "notes"]]
-            df.columns = ["Subject", "Start", "End", "Room", "Notes"]
-            st.table(df)
-    else:
-        st.info("No classes added yet.")
+            st.success(f"Task '{title}' added.")
 
 
-# ---------------------------
-# Tasks / Homework Page
-# ---------------------------
+# ------------------------------------------------
+# Tasks List / Main Page
+# ------------------------------------------------
+def tasks_page(view, selected_project, status_filter):
+    st.header("✅ Tasks")
 
-def tasks_page():
-    st.header("✅ Tasks / Homework")
+    # Add Task
+    add_task_form()
 
-    if not st.session_state.subjects:
-        st.warning("You must add at least one subject before adding tasks.")
+    st.markdown("---")
+    st.subheader("📋 Task List")
+
+    tasks = st.session_state.tasks
+    filtered = filter_tasks(tasks, view, selected_project, status_filter)
+
+    if not filtered:
+        st.info("No tasks matching this filter.")
         return
 
-    with st.form("add_task_form"):
-        subject_names = [s["name"] for s in st.session_state.subjects]
-        sel_subj_name = st.selectbox("Subject", subject_names)
-        title = st.text_input("Task title", placeholder="e.g. DAA Assignment 1")
-        task_type = st.selectbox("Type", ["Homework", "Assignment", "Project", "Reading", "Revision"])
-        due = st.date_input("Due date", value=date.today())
-        priority = st.selectbox("Priority", ["Low", "Medium", "High"])
-        submitted = st.form_submit_button("Add Task")
+    # Sort filtered tasks by due date (None at end)
+    def sort_key(t):
+        return (t["due_date"] is None, t["due_date"] or date.max, t["priority"])
 
-        if submitted:
-            if title.strip() == "":
-                st.error("Please enter a task title.")
-            else:
-                subj = next(s for s in st.session_state.subjects if s["name"] == sel_subj_name)
-                st.session_state.tasks.append(
-                    {
-                        "id": get_new_id(),
-                        "subject_id": subj["id"],
-                        "subject_name": subj["name"],
-                        "title": title.strip(),
-                        "type": task_type,
-                        "due_date": due,
-                        "priority": priority,
-                        "status": "Pending"
-                    }
-                )
-                st.success(f"Added task: {title}")
+    filtered.sort(key=sort_key)
 
-    if st.session_state.tasks:
-        st.subheader("Pending Tasks")
-
-        pending = [t for t in st.session_state.tasks if t["status"] == "Pending"]
-        if pending:
-            # Show checkboxes to mark as done
-            cols = st.columns([4, 1])
+    # Display tasks in a nice table with actions
+    for t in filtered:
+        with st.container():
+            cols = st.columns([0.06, 0.6, 0.14, 0.2])
             with cols[0]:
-                df = pd.DataFrame(pending)
-                df_display = df[["title", "subject_name", "type", "due_date", "priority"]]
-                df_display.columns = ["Task", "Subject", "Type", "Due Date", "Priority"]
-                st.table(df_display)
+                done = st.checkbox("", value=(t["status"] == "Completed"), key=f"done_{t['id']}")
+                if done:
+                    t["status"] = "Completed"
+                else:
+                    t["status"] = "Pending"
+
             with cols[1]:
-                st.write("Mark Done")
-                for t in pending:
-                    if st.checkbox(f"{t['title']}", key=f"task_done_{t['id']}"):
-                        t["status"] = "Completed"
-                        st.success(f"Marked '{t['title']}' as completed.")
+                title_disp = f"**{t['title']}**"
+                if t["status"] == "Completed":
+                    title_disp = f"~~{t['title']}~~ ✅"
+                st.markdown(title_disp)
 
-        else:
-            st.info("No pending tasks. Good job ✨")
+                meta = f"Project: `{t['project']}`"
+                if t["labels"]:
+                    meta += "  •  Labels: " + ", ".join([f"`{l}`" for l in t["labels"]])
+                st.caption(meta)
 
-        st.subheader("Completed Tasks")
-        completed = [t for t in st.session_state.tasks if t["status"] == "Completed"]
-        if completed:
-            dfc = pd.DataFrame(completed)
-            dfc_display = dfc[["title", "subject_name", "type", "due_date", "priority"]]
-            dfc_display.columns = ["Task", "Subject", "Type", "Due Date", "Priority"]
-            st.table(dfc_display)
-        else:
-            st.info("No completed tasks yet.")
-    else:
-        st.info("No tasks added yet.")
+                if t["description"]:
+                    st.write(t["description"])
+
+            with cols[2]:
+                # Priority + Status
+                prio_emoji = {
+                    "Low": "🟢",
+                    "Medium": "🟡",
+                    "High": "🟠",
+                    "Urgent": "🔴"
+                }.get(t["priority"], "⚪")
+                st.write(f"{prio_emoji} {t['priority']}")
+                st.write("✔️" if t["status"] == "Completed" else "⏳ Pending")
+
+            with cols[3]:
+                if t["due_date"]:
+                    today = date.today()
+                    if t["due_date"] < today and t["status"] == "Pending":
+                        st.error(f"Overdue: {t['due_date'].strftime('%d %b %Y')}")
+                    elif t["due_date"] == today:
+                        st.warning("Due today")
+                    else:
+                        st.info(f"Due: {t['due_date'].strftime('%d %b %Y')}")
+                else:
+                    st.caption("No due date")
+
+            st.markdown("---")
 
 
-# ---------------------------
-# Exams Page
-# ---------------------------
+# ------------------------------------------------
+# Analytics Page
+# ------------------------------------------------
+def analytics_page():
+    st.header("📊 Overview & Analytics")
+    tasks = st.session_state.tasks
 
-def exams_page():
-    st.header("📝 Exams")
-
-    if not st.session_state.subjects:
-        st.warning("You must add at least one subject before adding exams.")
+    if not tasks:
+        st.info("No tasks yet to analyze.")
         return
 
-    with st.form("add_exam_form"):
-        subject_names = [s["name"] for s in st.session_state.subjects]
-        sel_subj_name = st.selectbox("Subject", subject_names)
-        title = st.text_input("Exam title", placeholder="e.g. Midterm Exam")
-        exam_type = st.selectbox("Type", ["Midterm", "Final", "Quiz", "Viva", "Other"])
-        exam_date = st.date_input("Exam date", value=date.today())
-        exam_time = st.time_input("Exam time", value=time(9, 0))
-        location = st.text_input("Location / Room", placeholder="e.g. Hall A")
-        submitted = st.form_submit_button("Add Exam")
+    total = len(tasks)
+    completed = len([t for t in tasks if t["status"] == "Completed"])
+    pending = total - completed
+    overdue = len([
+        t for t in tasks
+        if t["status"] == "Pending" and t["due_date"] is not None and t["due_date"] < date.today()
+    ])
 
-        if submitted:
-            if title.strip() == "":
-                st.error("Please enter an exam title.")
-            else:
-                subj = next(s for s in st.session_state.subjects if s["name"] == sel_subj_name)
-                st.session_state.exams.append(
-                    {
-                        "id": get_new_id(),
-                        "subject_id": subj["id"],
-                        "subject_name": subj["name"],
-                        "title": title.strip(),
-                        "type": exam_type,
-                        "date": exam_date,
-                        "time": exam_time,
-                        "location": location.strip()
-                    }
-                )
-                st.success(f"Added exam: {title}")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Tasks", total)
+    col2.metric("Completed", completed)
+    col3.metric("Pending", pending)
+    col4.metric("Overdue", overdue)
 
-    if st.session_state.exams:
-        st.subheader("All Exams")
-        df = pd.DataFrame(st.session_state.exams)
-        df_display = df[["title", "subject_name", "type", "date", "time", "location"]]
-        df_display.columns = ["Exam", "Subject", "Type", "Date", "Time", "Location"]
-        st.table(df_display)
-    else:
-        st.info("No exams added yet.")
+    # Tasks per project
+    st.subheader("Tasks by Project")
+    proj_counts = {}
+    for t in tasks:
+        proj_counts[t["project"]] = proj_counts.get(t["project"], 0) + 1
+
+    df_proj = pd.DataFrame(
+        {"Project": list(proj_counts.keys()), "Tasks": list(proj_counts.values())}
+    ).set_index("Project")
+    st.bar_chart(df_proj)
+
+    # Tasks by priority
+    st.subheader("Tasks by Priority")
+    prio_counts = {}
+    for t in tasks:
+        prio_counts[t["priority"]] = prio_counts.get(t["priority"], 0) + 1
+
+    df_prio = pd.DataFrame(
+        {"Priority": list(prio_counts.keys()), "Tasks": list(prio_counts.values())}
+    ).set_index("Priority")
+    st.bar_chart(df_prio)
 
 
-# ---------------------------
+# ------------------------------------------------
+# About Page
+# ------------------------------------------------
+def about_page():
+    st.header("ℹ️ About This App")
+    st.markdown(
+        """
+        This app is a **Todoist-style task manager clone** built using **Python + Streamlit**.
+
+        ### Core Features
+        - Add tasks with title, description, project, priority, due date and labels  
+        - Organize tasks into **projects**  
+        - Mark tasks as **completed**  
+        - Filter by **Today**, **Upcoming**, **Overdue**, **Completed** or **All**  
+        - Filter by **Project** and **Status**  
+        - Simple **analytics** (tasks per project, tasks per priority)  
+
+        It uses **Streamlit session_state** to store data temporarily in memory, which is
+        perfect for:
+
+        - College mini-projects  
+        - Demonstrations in viva  
+        - Simple personal task management in browser  
+
+        You can deploy it on **Streamlit Cloud** and access it from anywhere.
+        """
+    )
+
+
+# ------------------------------------------------
 # Main App
-# ---------------------------
-
+# ------------------------------------------------
 def main():
-    st.set_page_config(page_title="Student Life Planner", layout="wide")
+    st.set_page_config(page_title="Todoist-style To-Do App", layout="wide")
     init_state()
-    username = sidebar_info()
 
-    tabs = st.tabs(["🏠 Dashboard", "📚 Subjects", "🕒 Classes", "✅ Tasks", "📝 Exams", "ℹ️ About App"])
+    username, view, selected_project, status_filter = sidebar()
+
+    tabs = st.tabs(["📋 Tasks", "🗂 Projects", "📊 Analytics", "ℹ️ About"])
 
     with tabs[0]:
-        dashboard(username)
+        st.caption(f"Hello, {username}! Viewing: **{view}**")
+        tasks_page(view, selected_project, status_filter)
 
     with tabs[1]:
-        subjects_page()
+        projects_page()
 
     with tabs[2]:
-        classes_page()
+        analytics_page()
 
     with tabs[3]:
-        tasks_page()
-
-    with tabs[4]:
-        exams_page()
-
-    with tabs[5]:
-        st.header("ℹ️ About This App")
-        st.markdown(
-            """
-            This is a **Student Life Planner** web app inspired by the features of
-            **My Study Life**:
-
-            - Manage **subjects** with teacher and color tags  
-            - Maintain a **class timetable** for each day of the week  
-            - Track **tasks / homework** with due dates & priorities  
-            - Add **exams** with date, time, and location  
-            - See a **dashboard** of today's classes, tasks, and upcoming exam  
-
-            Built with **Python + Streamlit** so it runs on the web and works great
-            as a mini project or academic assignment.
-            """
-        )
+        about_page()
 
 
 if __name__ == "__main__":
